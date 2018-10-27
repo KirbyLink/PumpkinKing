@@ -10,7 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 
-namespace FestivalEndTimeTweak
+namespace PumpkinKing
 {
     /// <summary>The mod entry point.</summary>
     public class ModEntry : Mod
@@ -26,14 +26,14 @@ namespace FestivalEndTimeTweak
             //https://github.com/KirbyLink/PumpkinKing
             var harmony = HarmonyInstance.Create("com.github.kirbylink.pumpkinking");
             var original = typeof(HoeDirt).GetMethod("plant");
-            var prefix = helper.Reflection.GetMethod(typeof(FestivalEndTimeTweak.ChangeFestivalEndTime), "Prefix").MethodInfo;
-            var postfix = helper.Reflection.GetMethod(typeof(FestivalEndTimeTweak.ChangeFestivalEndTime), "Postfix").MethodInfo;
+            var prefix = helper.Reflection.GetMethod(typeof(PumpkinKing.PumpkinKingModifications), "Prefix").MethodInfo;
+            var postfix = helper.Reflection.GetMethod(typeof(PumpkinKing.PumpkinKingModifications), "Postfix").MethodInfo;
             harmony.Patch(original, new HarmonyMethod(prefix), new HarmonyMethod(postfix));
 
         }
     }
 
-    public static class ChangeFestivalEndTime
+    public static class PumpkinKingModifications
     {
         /* Check if planting fertilizer or if the crops has no seasons to grow in or not pumpkins */
         static void Prefix(HoeDirt __instance, bool isFertilizer, int index, int tileX, int tileY, ref bool __state)
