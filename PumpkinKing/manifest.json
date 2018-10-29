@@ -6,7 +6,7 @@
    "UniqueID": "kirbylink.pumpkinking",
    "EntryDll": "pumpkinking.dll",
    "MinimumApiVersion": "2.0",
-   "UpdateKeys": [],
+   "UpdateKeys": ["Nexus:3006"],
    "Dependencies": [
     {
       "UniqueID": "Platonymous.CustomFarming"
