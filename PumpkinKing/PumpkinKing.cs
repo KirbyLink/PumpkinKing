@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewValley;
 using StardewValley.TerrainFeatures;
+using System;
 using System.Collections.Generic;
 
 namespace PumpkinKing
@@ -16,109 +17,164 @@ namespace PumpkinKing
         /// <summary>The mod entry point, called after the mod is first loaded.</summary>
         /// <param name="helper">Provides simplified APIs for writing mods.</param>
         public override void Entry(IModHelper helper)
-        {
+        {    
             //Harmony patcher
             //https://github.com/KirbyLink/PumpkinKing
+
             var harmony = HarmonyInstance.Create("com.github.kirbylink.pumpkinking");
+            
+            //Planting seeds
             var plantOriginal = typeof(HoeDirt).GetMethod("plant");
-            var plantPrefix = helper.Reflection.GetMethod(typeof(PumpkinKing.PlantNearPumpkinKing), "Prefix").MethodInfo;
-            var plantPostfix = helper.Reflection.GetMethod(typeof(PumpkinKing.PlantNearPumpkinKing), "Postfix").MethodInfo;
+            var plantPrefix = helper.Reflection.GetMethod(typeof(PumpkinKing.PlantSeeds), "Prefix").MethodInfo;
+            var plantPostfix = helper.Reflection.GetMethod(typeof(PumpkinKing.PlantSeeds), "Postfix").MethodInfo;
+
+            //Placing Scarecrow
+            var placeOriginal = typeof(StardewValley.Object).GetMethod("placementAction");
+            var placePrefix = helper.Reflection.GetMethod(typeof(PumpkinKing.PlacePumpkinKing), "Prefix").MethodInfo;
+            var placePostfix = helper.Reflection.GetMethod(typeof(PumpkinKing.PlacePumpkinKing), "Postfix").MethodInfo;
+            
+            //Removing Scarecrow
             var removeOriginal = typeof(Tool).GetMethod("DoFunction");
             var removePrefix = helper.Reflection.GetMethod(typeof(PumpkinKing.PickUpPumpkinKing), "Prefix").MethodInfo;
             var removePostfix = helper.Reflection.GetMethod(typeof(PumpkinKing.PickUpPumpkinKing), "Postfix").MethodInfo;
-            harmony.Patch(plantOriginal, new HarmonyMethod(plantPrefix), new HarmonyMethod(plantPostfix));
-            harmony.Patch(removeOriginal, new HarmonyMethod(removePrefix), new HarmonyMethod(removePostfix));
 
+            harmony.Patch(plantOriginal, new HarmonyMethod(plantPrefix), new HarmonyMethod(plantPostfix));
+            harmony.Patch(placeOriginal, new HarmonyMethod(placePrefix), new HarmonyMethod(placePostfix));
+            harmony.Patch(removeOriginal, new HarmonyMethod(removePrefix), new HarmonyMethod(removePostfix));
+            
+        }
+
+        public static void NewGrowthDays(GameLocation location, Vector2 relativeVector, bool isScarecrow, int offset, Farmer who)
+        {
+            //Find all HoeDirt within radius
+            //relativeVector is Vector of HoeDirt having seed planted or scarecrow being placed
+
+            //Create a list of KVP's of Hoedirts that are growing pumpkins
+            List<KeyValuePair<Vector2, HoeDirt>> hoeDirtList = new List<KeyValuePair<Vector2, HoeDirt>>();
+            if (isScarecrow)
+            {
+                foreach (KeyValuePair<Vector2, TerrainFeature> pair in location.terrainFeatures.Pairs)
+                {
+                    TerrainFeature terrain = pair.Value;
+                    Crop crop = (terrain is HoeDirt ? (terrain as HoeDirt).crop : null);
+                    bool isGrowingPumpkin = crop != null && crop.indexOfHarvest.Value == 276 && !crop.fullyGrown.Value;
+
+                    if (isGrowingPumpkin && Vector2.Distance(pair.Key, relativeVector) < 9.0)
+                    {
+                        hoeDirtList.Add(new KeyValuePair<Vector2, HoeDirt>(pair.Key, (pair.Value as HoeDirt)));
+                    }
+                }
+            }
+            else
+            {
+                HoeDirt dirt = (location.terrainFeatures[relativeVector] is HoeDirt ? location.terrainFeatures[relativeVector] as HoeDirt : null);
+                if (dirt != null)
+                {
+                    hoeDirtList.Add(new KeyValuePair<Vector2, HoeDirt>(relativeVector, dirt));
+                }
+            }
+            
+            //Set new phaseDays
+            foreach (KeyValuePair<Vector2, HoeDirt> dirtPair in hoeDirtList)
+            {
+                //Get number of scarecrows in range of each HoeDirt
+                int numScarecrows = 0;
+                foreach (KeyValuePair<Vector2, StardewValley.Object> objPair in location.objects.Pairs)
+                {
+                    if (objPair.Value.Name.Contains("The Pumpkin King") && Vector2.Distance(dirtPair.Key, objPair.Key) < 9.0)
+                    {
+                        numScarecrows++;
+                    }
+                }
+
+                numScarecrows += offset;
+                Crop crop = dirtPair.Value.crop;
+                int fertlizerType = dirtPair.Value.fertilizer.Value;
+                int pumpkinGrowthDays = 13;
+                int growthDayChange = 0;
+            
+                // Get total change for all modifiers
+                // Max change is 60% (5 day growth)
+                float totalPercentChange = 0.25f * numScarecrows;
+                totalPercentChange += (fertlizerType == 465 ? 0.1f : (fertlizerType == 466 ? 0.25f : 0));
+                totalPercentChange += (who.professions.Contains(5) ? 0.1f : 0);
+                growthDayChange = (int)Math.Ceiling((double)pumpkinGrowthDays * (double)Math.Min(0.6f, totalPercentChange));
+
+                // Reset pumpkin phase days to normal amounts;
+                IList<int> phaseDays = new List<int> { 1, 2, 3, 4, 3, 99999 };
+                crop.phaseDays.Set(phaseDays);
+
+                // Set new phaseDays
+                while (growthDayChange > 0)
+                {
+                    int i = 0;
+                    while (i < crop.phaseDays.Count - 1)
+                    {
+                        if (crop.phaseDays[i] > 1)
+                        {
+                            crop.phaseDays[i]--;
+                            --growthDayChange;
+                        }
+                        if (growthDayChange <= 0 || (i == crop.phaseDays.Count - 2 && crop.phaseDays[i] == 1))
+                        {
+                            break;
+                        }
+                        i++;
+                    }
+                }
+            }
         }
     }
-
-    public static class PlantNearPumpkinKing
+    
+    public static class PlantSeeds
     {
-        
-        /* Check if planting fertilizer or if the crops has no seasons to grow in or not pumpkins */
-        static void Prefix(HoeDirt __instance, bool isFertilizer, int index, int tileX, int tileY, ref bool __state)
+
+        /* Check if planting fertilizer or is not pumpkins */
+        static void Prefix(HoeDirt __instance, bool isFertilizer, int index, ref bool __state)
         {
             if (__instance != null)
             {
-                Crop crop = new Crop(index, tileX, tileX);
-                __state = isFertilizer || crop.seasonsToGrowIn.Count == 0 || index != 490;
+                __state = isFertilizer || index != 490;
             }
         }
 
-        static void Postfix(HoeDirt __instance, int index, int tileX, int tileY, Farmer who, ref bool __state, bool __result)
+        static void Postfix(int tileX, int tileY, Farmer who, GameLocation location, ref bool __state, bool __result)
         {
-            /*  
-             *  Add an additional check to see if there is a Pumpkin King scarecrow in the area.
-             *  If so, cut phaseDays by 25%.
-            */
-
             //If state is true, we didn't make it past first two returns in plant() or this crop isn't a pumpkin
             //If result is false, we couldn't plant the seed for some reason
             //If result is true, we have already updated this HoeDirt.crop
             if (!__state && __result)
             {
-                //Is the Pumpkin King Scarecrow in the area?
-                Farm farm = Game1.getFarm();
-                List<Vector2> vector2List = new List<Vector2>();
-                foreach(KeyValuePair<Vector2, StardewValley.Object> pair in farm.objects.Pairs)
-                {
-                    if (pair.Value.bigCraftable.Value && pair.Value.Name.Contains("The Pumpkin King"))
-                        vector2List.Add(pair.Key);
-                }
+                Vector2 hoeDirtVector = new Vector2((float) tileX, (float) tileY);
+                ModEntry.NewGrowthDays(location, hoeDirtVector, false, 0, who);
+            }
+        }
+    }
 
-                if (vector2List == null || vector2List.Count == 0)
-                {
-                    return;
-                }
+    public static class PlacePumpkinKing
+    {
+        
+        /* Check if item being placed is The Pumpkin King */
+        static void Prefix(StardewValley.Object __instance, GameLocation location, ref bool __state)
+        {
+            if (__instance != null && location.IsFarm)
+            {
+                __state = __instance != null && __instance.Name.Contains("The Pumpkin King");
+            }
+        }
 
-                //Reduce phaseDays by 25%
-                Crop crop = __instance.crop;
-                Vector2 tileVector = new Vector2(tileX, tileY);
-                foreach (Vector2 scarecrow in vector2List)
-                {
-                    if ((double)Vector2.Distance(scarecrow, tileVector) < 9.0)
-                    {
-                        /* Code from HoeDirt.plant() */
-                        int numGrowthDays = 0;
-                        for (int index1 = 0; index1 < crop.phaseDays.Count - 1; index1++)
-                            numGrowthDays += crop.phaseDays[index1];
-                        bool hasOtherModifier = __instance.fertilizer.Value == 465 || __instance.fertilizer.Value == 466 || who.professions.Contains(5);
-                        int growthDayChange = (hasOtherModifier ? 3 : 4);
-                        int initialOffset = 0;
-                        //Set initialOffset based on last phaseDay modified by fertilizer/skill combo
-                        if (hasOtherModifier)
-                        {
-                            if (__instance.fertilizer.Value == 465)
-                            {
-                                initialOffset = (who.professions.Contains(5) ? 4 : 3);
-                            }
-                            else if (__instance.fertilizer.Value == 466)
-                            {
-                                initialOffset = (who.professions.Contains(5) ? 3 : 2);
-                            }
-                            else
-                                initialOffset = 3;
-                        }
+        static void Postfix(StardewValley.Object __instance, GameLocation location, Farmer who, int x, int y, bool __state, bool __result)
+        {
+            /*  
+             *  Alter any growing pumpkins in the area by reducing growth rate by 25%
+            */
 
-                        for (int i1 = 0; growthDayChange > 0 && i1 < 3; ++i1)
-                        {
-                            int i2 = (i1 == 0 ? initialOffset : 0);
-                            while (i2 < crop.phaseDays.Count - 1)
-                            {
-                                if (crop.phaseDays[i2] > 1)
-                                {
-                                    crop.phaseDays[i2]--;
-                                    --growthDayChange;
-                                }
-                                if (growthDayChange <= 0 || (i2 == crop.phaseDays.Count - 2 && crop.phaseDays[i2] == 1))
-                                {
-                                    break;
-                                }
-                                i2++;
-                            }
-                        }
-                    }
-                }
+            //If state is true, we we are placing The Pumpkin King
+            //If result is true, we have placed the scarecrow
+            if (__state && __result)
+            {
+                Vector2 scarecrowVector = new Vector2((float) (x / 64), (float) (y / 64));
+                ModEntry.NewGrowthDays(location, scarecrowVector, true, 0, who);                
             }
         }
     }
@@ -131,7 +187,7 @@ namespace PumpkinKing
         {
             if (__instance != null && location.IsFarm)
             {
-                Vector2 vector = new Vector2((float)(x / 64), (float)(y / 64));
+                Vector2 vector = new Vector2((float) (x / 64), (float) (y / 64));
                 StardewValley.Object vectorObject = null;
                 if (location.objects.ContainsKey(vector))
                 {
@@ -151,74 +207,8 @@ namespace PumpkinKing
             if (__state)
             {
                 //Find all HoeDirt within radius
-                foreach (KeyValuePair<Vector2, TerrainFeature> pair in location.terrainFeatures.Pairs)
-                {
-                    TerrainFeature pairTerrain = pair.Value;
-                    Vector2 scarecrowVector = new Vector2((float)(x / 64), (float)(y / 64));
-                    bool isHoeDirt = pairTerrain is HoeDirt;
-                    bool isPumpkin = (isHoeDirt ? ((pairTerrain as HoeDirt).crop != null && (pairTerrain as HoeDirt).crop.indexOfHarvest.Value == 276) : false);
-                    bool isWithinRange = Vector2.Distance(scarecrowVector, pair.Key) < 9.0;
-                    //Increase phaseDays by 25%
-                    if (isPumpkin && isWithinRange)
-                    {
-                        HoeDirt hoeDirt = (pairTerrain as HoeDirt);
-                        Crop crop = hoeDirt.crop;
-                        bool hadOtherModifier = hoeDirt.fertilizer.Value == 465 || hoeDirt.fertilizer.Value == 466 || who.professions.Contains(5);
-                        int phaseDayCount = crop.phaseDays.Count - 1;                        
-                        //Reset phaseDays based on last phaseDay modified by fertilizer/skill combo
-                        if (hadOtherModifier)
-                        {
-                            if (hoeDirt.fertilizer.Value == 465 || who.professions.Contains(5))
-                            {
-                                if (hoeDirt.fertilizer.Value == 465 && who.professions.Contains(5))
-                                {
-                                    crop.phaseDays[phaseDayCount - 1] = 3;
-                                    crop.phaseDays[phaseDayCount - 2] = 3;
-                                    crop.phaseDays[phaseDayCount - 3] = 2;
-                                }
-                                else
-                                {
-                                    crop.phaseDays[phaseDayCount - 1] = 3;
-                                    crop.phaseDays[phaseDayCount - 2] = 4;
-                                    crop.phaseDays[phaseDayCount - 3] = 2;
-                                }
-                            }
-                            else 
-                            {
-                                if (who.professions.Contains(5))
-                                {
-                                    crop.phaseDays[phaseDayCount - 1] = 2;
-                                    crop.phaseDays[phaseDayCount - 2] = 3;
-                                }
-                                else
-                                {
-                                    crop.phaseDays[phaseDayCount - 1] = 2;
-                                    crop.phaseDays[phaseDayCount - 2] = 3;
-                                    crop.phaseDays[phaseDayCount - 3] = 2;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            for(int i = 1; i < crop.phaseDays.Count - 1; i++)
-                            {
-                                switch (i)
-                                {
-                                    case 1:
-                                        crop.phaseDays[i] = 2;
-                                        break;
-                                    case 3:
-                                        crop.phaseDays[i] = 4;
-                                        break;
-                                    case 2:
-                                    case 4:
-                                        crop.phaseDays[i] = 3;
-                                        break;
-                                }
-                            }
-                        }
-                    }
-                }
+                Vector2 scarecrowVector = new Vector2((float)(x / 64), (float)(y / 64));
+                ModEntry.NewGrowthDays(location, scarecrowVector, true, -1, who);
             }
         }
     }
